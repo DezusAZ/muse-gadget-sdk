@@ -71,6 +71,16 @@ void muse_state_set_page(int cols, int lines);
 void muse_state_set_cjk_page(int cols, int lines);
 void muse_state_page(bool cjk, int *cols, int *lines);
 
+/* Reply "review" screen: hold the last reply's whole text on screen as one
+ * block until a button press. Set by the voice task, read by the UI. */
+#define MUSE_REVIEW_MAX 1024
+void muse_state_set_review(bool on);
+bool muse_state_review(void);
+/* The full reply text to show while reviewing (copied). */
+void muse_state_set_review_text(const char *text);
+/* Copies the review text if it changed since *version; returns true on change. */
+bool muse_state_review_text(char *out, size_t cap, uint32_t *version);
+
 void muse_state_set_power(const muse_power_t *power);
 muse_power_t muse_state_power(void);
 /* A battery and no USB power (charger or computer). Power saving asleep (the

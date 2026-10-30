@@ -69,6 +69,7 @@ extern "C" {
 #include "muse_account_api.h"
 #include "muse_link.h"
 #include "muse_settings.h"
+#include "muse_tts.h"
 #include "muse_wifi.h"
 }
 #include "muse_chat_priv.h"
@@ -990,6 +991,7 @@ static bool turn_start(uint32_t gen, bool text)
             turn_finish();
         }
     }
+    muse_tts_abort();   /* stop any speech still fetching from the previous turn */
     uint8_t *chunk = s_turn.chunk, *mp3 = s_turn.mp3, *note = s_turn.note;
     char *texts = s_turn.texts;
     s_turn = turn_t{};
@@ -1317,6 +1319,19 @@ static int bind_msg(const char *id, cJSON *payload)
 
 static void append_text(msg_t &m, const char *text)
 {
+    /* Drop Markdown formatting so TTS doesn't read it out ("asterisk asterisk")
+     * and the screen doesn't show the raw symbols. Single-char strip is safe
+     * even when a run like ** is split across streamed chunks. */
+    char clean[TEXT_MAX];
+    size_t ci = 0;
+    for (const char *p = text; *p && ci < sizeof(clean) - 1; p++) {
+        if (*p == '*' || *p == '#' || *p == '`') {
+            continue;
+        }
+        clean[ci++] = *p;
+    }
+    clean[ci] = '\0';
+    text = clean;
     size_t add = strlen(text);
     if (s_turn.texts) {
         char *full = s_turn.texts + (&m - s_turn.msgs) * TEXT_MAX;
@@ -1517,12 +1532,29 @@ static void start_tts(void)
          * end. decode() plays it at the speaker's volume, captions following,
          * and finishes the message once it's drained.
          */
-        m.pcm_start = s_turn.pcm_out;
-        m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+        const char *text = (s_turn.texts && m.len) ? s_turn.texts + i * TEXT_MAX : nullptr;
+        bool speak = text && *text && muse_settings_speaker_on() && muse_tts_ready();
         m.tts = TTS_ACTIVE;
         s_turn.tts_msg = i;
-        s_turn.silent = true;
-        ESP_LOGI(TAG, "showing message %s (%u chars)", m.id, (unsigned)m.len);
+        m.pcm_start = s_turn.pcm_out;
+        if (speak) {
+            /* Speak it: kick off the TTS fetch and let decode() play the MP3,
+             * captions following. (This is the hook the comment above describes.) */
+            m.pcm_frames = 0;
+            s_turn.silent = false;
+            s_turn.mp3_len = 0;
+            s_turn.mp3_ended = false;
+            s_turn.kbps = 0;
+            s_turn.down_rate = 0;
+            mp3dec_init(&s_turn.dec);
+            muse_tts_request(text);
+            ESP_LOGI(TAG, "speaking message %s (%u chars)", m.id, (unsigned)m.len);
+        } else {
+            /* Speaker off or no text: pace the caption with silence (stock behavior). */
+            m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+            s_turn.silent = true;
+            ESP_LOGI(TAG, "showing message %s (%u chars)", m.id, (unsigned)m.len);
+        }
         show_reply_start(m);
         return;
     }
@@ -1582,6 +1614,21 @@ static void decode(void)
         pace_silently();
         return;
     }
+    /* Pull MP3 from the TTS fetch task into the decode buffer, and note when the
+     * fetch has finished and nothing more is waiting, so decode() can drain. */
+    if (!s_turn.mp3_ended) {
+        size_t room = MP3_BUF - s_turn.mp3_len;
+        if (room) {
+            size_t got = muse_tts_read(s_turn.mp3 + s_turn.mp3_len, room);
+            if (got) {
+                mark(M_MP3);
+                s_turn.mp3_len += got;
+            }
+        }
+        if (!muse_tts_busy() && !muse_tts_available()) {
+            s_turn.mp3_ended = true;
+        }
+    }
     /*
      * minimp3 only takes a frame once it can see the next one's header. Given
      * less, it resets and says to skip all of it, which drops speech and clicks.
@@ -1632,9 +1679,17 @@ static void decode(void)
         m.pcm_frames = s_turn.pcm_out - m.pcm_start + rest;
     }
     if (s_turn.mp3_ended && !s_turn.mp3_len) {
-        m.pcm_frames = s_turn.pcm_out - m.pcm_start;
-        m.tts = TTS_FINISHED;
-        s_turn.tts_msg = -1;
+        if (s_turn.pcm_out == m.pcm_start) {
+            /* The fetch produced no audio (TTS failed or wasn't MP3): fall back
+             * to silence pacing so the caption holds for reading, as it would
+             * with the speaker off, instead of the message flashing by. */
+            m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+            s_turn.silent = true;
+        } else {
+            m.pcm_frames = s_turn.pcm_out - m.pcm_start;
+            m.tts = TTS_FINISHED;
+            s_turn.tts_msg = -1;
+        }
     }
 }
 
@@ -2048,6 +2103,7 @@ extern "C" void muse_hatch_start(void)
         s.cap = NDJSON_LINE_MAX;
     }
     s_turn.tts_msg = -1;
+    muse_tts_init();   /* spoken replies: fetches TTS audio for decode() to play */
     /* Stack in PSRAM: TLS, Noise and the MP3 decoder (~16 KB of scratch) all run here. */
     if (!s_cmds || !s_events || !s_in || !s_out || !s_turn.chunk || !s_turn.mp3 || (VOICE_NOTE && !s_turn.note) || !s_pcm || !s_pcm16 ||
         xTaskCreatePinnedToCoreWithCaps(hatch_task, "muse_chat", 48 * 1024, nullptr, 5, nullptr, 0,
@@ -2171,6 +2227,32 @@ extern "C" bool muse_hatch_turn_caption(size_t played, char *out, size_t cap)
     }
 
     return muse_hatch_caption_at(text, at, out, cap);
+}
+
+extern "C" size_t muse_hatch_reply_text(char *out, size_t cap)
+{
+    if (!out || !cap) {
+        return 0;
+    }
+    out[0] = '\0';
+    if (!s_turn.texts) {
+        return 0;
+    }
+    /* The whole reply: every message so far, joined, so the screen shows all of
+     * it (matching what the voice reads). Survives until the next turn. */
+    size_t total = 0;
+    for (int i = 0; i < s_turn.nmsgs; i++) {
+        const char *t = s_turn.texts + i * TEXT_MAX;
+        if (!s_turn.msgs[i].len || !t[0]) {
+            continue;
+        }
+        if (total && total + 1 < cap) {
+            strlcat(out, " ", cap);
+        }
+        strlcat(out, t, cap);
+        total = strlen(out);
+    }
+    return total;
 }
 
 extern "C" size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms)

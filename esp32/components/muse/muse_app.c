@@ -79,7 +79,13 @@ void muse_app_run(const muse_board_t *board)
     /* Let the boot animation (flame ignites, eyes open) play out. */
     vTaskDelay(pdMS_TO_TICKS(1400));
     if (muse_voice_start(q) != ESP_OK) {
-        ESP_LOGE(TAG, "voice pipeline unavailable");
+        ESP_LOGW(TAG, "voice pipeline unavailable (no on-device audio yet)");
+        /* Don't leave the avatar stuck in the ERROR face/caption that
+         * muse_voice_start() sets on failure: this board simply has no audio
+         * wired to Muse yet, but it is online and relays AI over the control
+         * link. Show the clean connected/idle state instead. */
+        muse_state_set_mode(MUSE_MODE_IDLE);
+        muse_state_set_caption("%s", "");
     } else {
         muse_state_set_mode(MUSE_MODE_IDLE);
         muse_state_set_caption("%s", "");   /* the button icons say how to talk */

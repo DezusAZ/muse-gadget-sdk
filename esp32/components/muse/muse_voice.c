@@ -341,8 +341,11 @@ static bool record(bool barge_in, size_t *held, char *why, size_t cap)
 static void go_idle(const char *caption);
 
 /*
- * Plays Hatch's reply as it arrives, with its text as the caption. Returns
- * true if interrupted by a new press. *delivered: the VM has the note.
+ * Plays Hatch's reply as it arrives. The whole reply text goes up on screen as
+ * one block the moment it starts arriving (read immediately, volume off or on,
+ * while the voice reads it in the background), and stays until a front-button
+ * press returns home. Returns true if interrupted before the reply arrived.
+ * *delivered: the VM has the note.
  */
 static bool hatch_reply(bool *delivered)
 {
@@ -352,7 +355,9 @@ static bool hatch_reply(bool *delivered)
     static const int16_t silence[MUSE_AUDIO_CHUNK];
     char text[96];
     static char page[MUSE_CAPTION_MAX];
-    bool done = false, speaking = false, replied = false;
+    bool done = false, speaking = false, replied = false, reviewing = false;
+    static char rtext[MUSE_REVIEW_MAX];
+    size_t rlen = 0;
     size_t played = 0;
     int64_t t0 = esp_timer_get_time();
     *delivered = false;
@@ -392,9 +397,15 @@ static bool hatch_reply(bool *delivered)
             }
         }
         if (got_event(MUSE_PTT_DOWN)) {
-            ESP_LOGI(TAG, "reply interrupted");
             muse_hatch_turn_cancel();
             muse_state_set_level(0);
+            if (reviewing) {
+                /* Reading the reply (text up, voice in the background): a press
+                 * just returns to the home screen, not a new recording. */
+                muse_state_set_review(false);
+                return false;
+            }
+            ESP_LOGI(TAG, "reply interrupted");
             return true;
         }
         size_t n = muse_hatch_turn_read(buf, MUSE_AUDIO_CHUNK, speaking || done ? 0 : 20);
@@ -418,13 +429,30 @@ static bool hatch_reply(bool *delivered)
         if ((speaking || replied) && muse_hatch_turn_caption(played, page, sizeof(page))) {
             muse_state_set_caption("%s", page);
         }
+        /* Put the whole reply on screen the instant it starts arriving (and keep
+         * it current as it streams), so it's readable right away while the voice
+         * reads it in the background — no waiting for playback to finish. */
+        if (replied) {
+            size_t rn = muse_hatch_reply_text(rtext, sizeof(rtext));
+            if (rn && rn != rlen) {
+                rlen = rn;
+                muse_state_set_review_text(rtext);
+            }
+            if (rlen && !reviewing) {
+                muse_state_set_review(true);
+                reviewing = true;
+            }
+        }
     }
     muse_state_set_level(0);
     ESP_LOGI(TAG, "muse reply: %.2fs of audio, %.2fs total", (double)played / MUSE_AUDIO_RATE,
              (esp_timer_get_time() - t0) / 1e6);
-    if (!played) {
-        /* No speech (TTS unavailable): leave the reply text up for a moment. */
-        vTaskDelay(pdMS_TO_TICKS(2500));
+    if (reviewing) {
+        /* Playback done; the text stays up until a front-button press returns home. */
+        while (!got_event(MUSE_PTT_DOWN)) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        muse_state_set_review(false);
     }
     return false;
 }

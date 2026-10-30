@@ -80,6 +80,9 @@ menu "Muse"
         config MUSE_BOARD_GUITION_JC3248W535
             bool "Guition JC3248W535 (ESP32-S3, 3.5\" 320x480 touch LCD, speaker)"
             depends on IDF_TARGET_ESP32S3
+        config MUSE_BOARD_BANSHEE
+            bool "Wired Hatters Banshee (ESP32-C5, 240x320 ILI9341 SPI LCD)"
+            depends on IDF_TARGET_ESP32C5
     endchoice
 
     config MUSE_ENABLED
@@ -104,6 +107,7 @@ menu "Muse"
         default "m5stack_core2" if MUSE_BOARD_M5STACK_CORE2
         default "fnk0104b" if MUSE_BOARD_FNK0104B
         default "guition_jc3248w535" if MUSE_BOARD_GUITION_JC3248W535
+        default "banshee" if MUSE_BOARD_BANSHEE
         default "none"
 
     # The Muse tools' serial port: the console UART behind the board's USB

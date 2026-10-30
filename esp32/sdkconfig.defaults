@@ -19,8 +19,18 @@ CONFIG_ESP32C5_REV_MAX_FULL=199
 # C5 max CPU is 240 MHz.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Public builds use the ESP32-C5 DevKitC-1 addressable status LED on GPIO27.
+# Wired Hatters Banshee status LED. The DevKitC-1 "addressable RGB LED" backend
+# drives a single WS2812 on CONFIG_HOMEHUB_LED_STRIP_GPIO. GhostESP's Banshee
+# build lights a single WS2812 on GPIO9 (verified in Banshee_C5.elf:
+# rgb_manager_init(&rgb, 9, n, GRB, WS2812, -1,-1,-1)). GPIO27 on the Banshee is
+# a display (Parlio) data line, NOT the LED — so the DevKitC-1 default (GPIO27)
+# lit nothing and risked poking the panel.
 CONFIG_HOMEHUB_LED_BACKEND_DEVKIT_GPIO27=y
+CONFIG_HOMEHUB_LED_STRIP_GPIO=9
+# Banshee WS2812 is green-first (GRB). The DevKitC-1 LED is the unusual red-first
+# (RGB), which is the default; turn it off so colours map correctly. If green
+# shows as red / amber as green, flip this back to y.
+CONFIG_HOMEHUB_LED_RGB_ORDER=n
 # The DevKitC-1 BOOT button is the active-low setup/reset input on GPIO28.
 CONFIG_HOMEHUB_BUTTON_GPIO=28
 
@@ -193,3 +203,6 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 # Skip PSRAM memtest — intermittent 3/262144 failures on first power-on reset
 # with C5 rev 1.2 cause abort; succeeds on warm reboot. Not worth blocking boot.
 CONFIG_SPIRAM_MEMTEST=n
+# Set your SDK token from gadgets.muse.ai > Account > SDK tokens. Keep it out
+# of git (e.g. esp32/.sdk-token, which is gitignored) and paste it in locally.
+CONFIG_GADGET_SDK_TOKEN=""

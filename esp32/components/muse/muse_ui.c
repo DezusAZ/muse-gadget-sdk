@@ -110,6 +110,10 @@ static lv_obj_t *s_name_lbl;    /* this gadget's own name, to tell it from the n
 static lv_obj_t *s_power_lbl;
 static lv_obj_t *s_caption_lbl;
 static lv_obj_t *s_reply_lbl;   /* full layout: the reply's page while answering */
+static lv_obj_t *s_mute_icon;   /* bottom-right muted-speaker icon, shown only when muted */
+static lv_obj_t *s_review_box;  /* full-screen scrollable panel holding the reply */
+static lv_obj_t *s_review_lbl;  /* the whole reply as one wrapping label, held until a press */
+static uint32_t s_review_version;
 static lv_obj_t *s_meter[METER_SEGS];
 static lv_obj_t *s_speaker;
 static lv_obj_t *s_speaker_icon;
@@ -891,6 +895,78 @@ static void build_screen(void)
     lv_obj_set_flag(s_name_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
 
     s_caption_lbl = make_label(face, font_pick(caption_font(), &lv_font_unscii_8), COLOR_CAPTION);
+
+    /* Muted indicator in the bottom-right corner, over the home screen. Shown
+     * only while the speaker is off (the front mute button toggles it), so the
+     * user can see at a glance that replies are text-only. A small BLUE speaker
+     * with a thin RED prohibition sign over it (a circle + diagonal line) = the
+     * universal "no sound"; the ring and line are thin so the speaker still
+     * reads through them. On a faint dark disc so it stays legible over the
+     * avatar. Created before the review box so the full-screen reply covers it
+     * while reading. Exists on every board. */
+    s_mute_icon = lv_obj_create(face);
+    lv_obj_remove_style_all(s_mute_icon);
+    lv_obj_set_size(s_mute_icon, 26, 26);
+    lv_obj_set_style_bg_opa(s_mute_icon, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(s_mute_icon, lv_color_black(), 0);
+    lv_obj_set_style_radius(s_mute_icon, LV_RADIUS_CIRCLE, 0);
+    lv_obj_remove_flag(s_mute_icon, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(s_mute_icon, LV_ALIGN_BOTTOM_RIGHT, -5, -5);
+    lv_obj_add_flag(s_mute_icon, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *mute_spk = lv_label_create(s_mute_icon);
+    lv_obj_set_style_text_font(mute_spk, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(mute_spk, lv_color_hex(0x3B9EFF), 0);   /* blue speaker */
+    lv_label_set_text(mute_spk, LV_SYMBOL_MUTE);
+    lv_obj_center(mute_spk);
+
+    /* Thin red ring (prohibition circle) around the speaker. */
+    lv_obj_t *mute_ring = lv_obj_create(s_mute_icon);
+    lv_obj_remove_style_all(mute_ring);
+    lv_obj_set_size(mute_ring, 22, 22);
+    lv_obj_center(mute_ring);
+    lv_obj_set_style_radius(mute_ring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(mute_ring, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(mute_ring, 2, 0);
+    lv_obj_set_style_border_color(mute_ring, lv_color_hex(0xFF3B30), 0);
+    lv_obj_remove_flag(mute_ring, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Thin red diagonal line through the ring (the prohibition slash). The
+     * points array must outlive this call -- lv_line keeps the pointer. */
+    static lv_point_precise_t mute_slash[2] = { {6, 6}, {20, 20} };
+    lv_obj_t *mute_line = lv_line_create(s_mute_icon);
+    lv_line_set_points(mute_line, mute_slash, 2);
+    lv_obj_set_style_line_width(mute_line, 2, 0);
+    lv_obj_set_style_line_color(mute_line, lv_color_hex(0xFF3B30), 0);
+    lv_obj_set_style_line_rounded(mute_line, true, 0);
+
+    /* Review screen: a full-screen opaque panel holding the whole reply (avatar
+     * and everything else covered), read until a press. It's a scrollable
+     * container -- drag up/down on the touch panel to read a reply too long for
+     * one screen -- with the reply as one wrapping label inside. Built here,
+     * before the small-board return, so it exists on every board. */
+    s_review_box = lv_obj_create(face);
+    lv_obj_remove_style_all(s_review_box);
+    lv_obj_set_size(s_review_box, s_w, s_h);
+    lv_obj_align(s_review_box, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_opa(s_review_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_review_box, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_pad_all(s_review_box, 6, 0);
+    lv_obj_add_flag(s_review_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_review_box, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_review_box, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(s_review_box, LV_OBJ_FLAG_HIDDEN);
+
+    s_review_lbl = lv_label_create(s_review_box);
+    lv_label_set_long_mode(s_review_lbl, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_width(s_review_lbl, s_w - 12);   /* box width minus its 6px padding */
+    lv_obj_set_style_text_font(s_review_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_review_lbl, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_set_style_text_align(s_review_lbl, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_text_line_space(s_review_lbl, CAPTION_LINE_SPACE, 0);
+    lv_obj_align(s_review_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_label_set_text(s_review_lbl, "");
+
     if (s_small) {
         /* Two lines over the bottom of the face, on a dark band so they stay
          * legible. A tall screen has room to keep them above the mic icon. */
@@ -1421,6 +1497,31 @@ static void update_status(muse_mode_t mode, float now)
         }
     }
     update_power(now);
+
+    /* Muted-speaker icon: visible only while the speaker is off (toggled from
+     * the front mute button, settings, the phone or serial). */
+    if (s_mute_icon) {
+        lv_obj_set_flag(s_mute_icon, LV_OBJ_FLAG_HIDDEN, muse_settings_speaker_on());
+    }
+
+    /* Review screen: a full-screen opaque, scrollable block of the whole reply,
+     * over everything, held until a front-button press dismisses it. Short and
+     * medium replies sit at a fixed, readable size; a longer one overflows and
+     * is read by dragging up/down on the touch panel. */
+    if (s_review_box) {
+        bool review = muse_state_review();
+        if (review) {
+            static char rt[MUSE_REVIEW_MAX];
+            if (muse_state_review_text(rt, sizeof(rt), &s_review_version)) {
+                lv_label_set_text(s_review_lbl, rt);
+                lv_obj_scroll_to_y(s_review_box, 0, LV_ANIM_OFF);   /* start at the top */
+            }
+            lv_obj_move_foreground(s_review_box);
+        } else {
+            s_review_version = 0;   /* re-read the text on the next review */
+        }
+        lv_obj_set_flag(s_review_box, LV_OBJ_FLAG_HIDDEN, !review);
+    }
 }
 
 static volatile bool s_snapshot;

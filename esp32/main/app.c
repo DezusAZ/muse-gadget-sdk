@@ -2481,6 +2481,31 @@ void app_run(void) {
     config_store_init();
     wifi_known_init();
 
+#if CONFIG_MUSE_BOARD_BANSHEE
+    /* Hard-coded Wi-Fi for this Banshee: seed the lab + home networks so it
+     * auto-joins whichever is in range (join_saved_networks scans and picks the
+     * strongest present) with no BLE re-provisioning. Only writes NVS when a
+     * network is missing, so repeat boots don't churn flash; survives a setup
+     * reset because it re-seeds every boot. */
+    {
+        static const struct { const char *ssid, *pass; } hardwifi[] = {
+            { "Brance",    "SpotAssNippa69!" },   /* lab */
+            { "PuddinPie", "Gettinit5!" },        /* home (SSID case matters) */
+        };
+        wifi_known_list_t *kl = malloc(sizeof(*kl));
+        if (kl) {
+            wifi_known_load(kl);
+            for (size_t i = 0; i < sizeof(hardwifi) / sizeof(hardwifi[0]); i++) {
+                if (find_saved_network(kl, hardwifi[i].ssid) < 0) {
+                    wifi_known_remember(hardwifi[i].ssid, hardwifi[i].pass, 0);
+                }
+            }
+            wifi_known_wipe(kl);   /* clears the passwords it copied */
+            free(kl);
+        }
+    }
+#endif
+
     identity_init();
 #if CONFIG_MUSE_ENABLED
     muse_glue_storage_ready();

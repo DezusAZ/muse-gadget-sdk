@@ -47,6 +47,9 @@ static SemaphoreHandle_t s_format_lock;
 static EventGroupHandle_t s_wake;
 static volatile int s_page_cols = 16, s_page_lines = 2;
 static volatile int s_cjk_cols, s_cjk_lines;
+static volatile bool s_review;
+static char s_review_text[MUSE_REVIEW_MAX];
+static volatile uint32_t s_review_text_version;
 static muse_power_t s_power = { .battery_pct = -1 };
 static volatile bool s_as_if_battery;
 
@@ -157,6 +160,32 @@ void muse_state_page(bool cjk, int *cols, int *lines)
     bool own = cjk && s_cjk_cols > 0;
     *cols = own ? s_cjk_cols : s_page_cols;
     *lines = own ? s_cjk_lines : s_page_lines;
+}
+
+void muse_state_set_review(bool on)
+{
+    s_review = on;
+}
+
+bool muse_state_review(void)
+{
+    return s_review;
+}
+
+void muse_state_set_review_text(const char *text)
+{
+    strlcpy(s_review_text, text ? text : "", sizeof(s_review_text));
+    s_review_text_version++;   /* bumped after the copy: a new version implies a full buffer */
+}
+
+bool muse_state_review_text(char *out, size_t cap, uint32_t *version)
+{
+    if (*version == s_review_text_version) {
+        return false;
+    }
+    *version = s_review_text_version;
+    strlcpy(out, s_review_text, cap);
+    return true;
 }
 
 void muse_state_set_power(const muse_power_t *power)

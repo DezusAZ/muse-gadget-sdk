@@ -543,6 +543,9 @@ int wifi_mgr_scan(wifi_scan_entry_t *out, int max_entries, uint8_t channel,
     free(recs);
     xSemaphoreGive(s_scan_mutex);
 
+    for (int i = 0; i < n; i++) {
+        ESP_LOGI(TAG, "  seen \"%s\" rssi=%d auth=%d", out[i].ssid, out[i].rssi, out[i].auth_mode);
+    }
     ESP_LOGI(TAG, "scan: %d records -> %d unique SSIDs", (int)want, n);
     return n;
 }

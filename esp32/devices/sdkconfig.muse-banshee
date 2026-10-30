@@ -1,0 +1,58 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Wired Hatters Banshee: the ESP32-C5 module that drives the display (240x320
+# ILI9341 SPI LCD), 8 MB flash, 8 MB quad PSRAM. BOOT button on GPIO28 is the
+# pairing-confirm / talk button. Console is UART0 (GPIO11/12) behind the
+# module's on-board CH340, so no USB-Serial/JTAG console override.
+# All the C5 radio/PSRAM/flash tuning comes from sdkconfig.defaults.
+# Load last: sdkconfig.defaults;sdkconfig.muse;sdkconfig.muse-banshee.
+CONFIG_IDF_TARGET="esp32c5"
+CONFIG_MUSE_BOARD_BANSHEE=y
+CONFIG_HOMEHUB_BUTTON_GPIO=28
+
+# 8 MB flash: use the 8 MB Muse partition layout. sdkconfig.muse defaults to the
+# 16 MB one (partitions_muse.csv / FLASHSIZE 16MB); override both back here.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_muse_8mb.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# Free internal (DMA-capable) RAM for the BLE controller WITHOUT starving Wi-Fi.
+# NimBLE host allocations and static BSS go to PSRAM; the LVGL draw buffers also
+# go to PSRAM (set in board_banshee.c). But Wi-Fi/lwIP buffers stay in INTERNAL
+# RAM: the C5 has slow quad PSRAM, and Wi-Fi in PSRAM caused it to associate
+# then drop (missed beacons/ACKs) with a strong signal. Leaving Wi-Fi internal
+# while the display uses PSRAM is the right split for this chip.
+# CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP is not set
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+
+# Disable the home-network L3 tunnel + discovery. With the LVGL avatar UI
+# resident, internal RAM is ~2 KB free and the tunnel task can't start
+# ("tunnel netif failed to start"), which shows as an error on the status icon.
+# The AI control channel (the Noise control WebSocket) does not need it, and
+# turning it off frees the RAM and gives a clean "connected" (green) status.
+CONFIG_HOMEHUB_TUNNEL=n
+# The UI needs ~30 KB less reserved internal RAM than the headless C5 tuning
+# holds back; lower the PSRAM-fallback internal reserve so small allocations can
+# spill to PSRAM (sdkconfig.defaults reserves 64 KB for headless AES DMA).
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+# Google Trust Services (used by the TTS endpoint translate.google.com) serves
+# cross-signed certificate chains; without this the esp_crt_bundle verify finds
+# "No matching trusted root" even though GTS Root R1 is in the full bundle.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+# Extra montserrat sizes so the reply-review screen can auto-fit the font to
+# the text (pick the largest that fits the screen), gracefully, not just 14->8.
+CONFIG_LV_FONT_MONTSERRAT_10=y
+CONFIG_LV_FONT_MONTSERRAT_12=y

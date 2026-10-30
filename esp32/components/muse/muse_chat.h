@@ -106,6 +106,12 @@ muse_hatch_ev_t muse_hatch_turn_event(char *text, size_t cap);
  */
 bool muse_hatch_turn_caption(size_t played, char *out, size_t cap);
 
+/*
+ * The last reply's full text, for the review screen: copies it into `out` and
+ * returns its length (0 if there's no reply to show). Valid until the next turn.
+ */
+size_t muse_hatch_reply_text(char *out, size_t cap);
+
 /* Reply speech as 16 kHz mono. Waits up to wait_ms for some; returns frames read. */
 size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms);
 

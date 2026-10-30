@@ -77,6 +77,7 @@ static char s_noise_host[256] = NOISE_DEFAULT_HOST;
 #define RECONNECT_AUTH_FAILED_MS  60000
 #define RECONNECT_DELAY_STEP_MS   250
 #define KEEPALIVE_INTERVAL_MS     60000
+#define RX_LIVENESS_TIMEOUT_MS    (KEEPALIVE_INTERVAL_MS * 3)  // no inbound (incl. keepalive pongs) this long => half-open link, reconnect
 #define POWER_SAVE_QUIET_MS       1000    // noise_ctrl_set_power_save(): quiet this long,
 #define POWER_SAVE_POLL_MS        100     // then poll this often
 #define IDLE_QUIET_MS             50      // otherwise quiet this long,
@@ -1972,6 +1973,19 @@ static session_result_t run_session(stack_monitor_t *stack) {
         }
         int flags = lwip_fcntl(sockfd, F_GETFL, 0);
         lwip_fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
+        // TCP keepalive: the OS probes the peer so a dead/half-open TCP path
+        // (no FIN/RST ever seen) is detected in ~85s and surfaces as an rx
+        // error, instead of the session believing it is still up. Backstop to
+        // the inbound-liveness timeout in the loop. Best-effort; ignore errors.
+        int ka_on = 1;
+        setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE, &ka_on, sizeof(ka_on));
+#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+        int ka_idle = 45, ka_intvl = 10, ka_cnt = 4;
+        setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE, &ka_idle, sizeof(ka_idle));
+        setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, &ka_intvl, sizeof(ka_intvl));
+        setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT, &ka_cnt, sizeof(ka_cnt));
+#endif
     }
 
     s_connected = true;
@@ -2229,6 +2243,21 @@ static session_result_t run_session(stack_monitor_t *stack) {
                 last_activity_us = esp_timer_get_time();
                 did = true;
             }
+        }
+
+        // Inbound-liveness: nothing has arrived — not even a keepalive pong —
+        // for RX_LIVENESS_TIMEOUT_MS. The link is half-open: our sends buffer
+        // into a dead socket and "succeed", so no error surfaces on its own and
+        // the session would otherwise sit dead (ws=up) until a reboot. Tear it
+        // down so noise_ctrl_task reconnects. A healthy link answers the 60 s
+        // keepalive ping with a pong that resets last_rx_us, so this never trips
+        // one.
+        if (esp_timer_get_time() - last_rx_us >=
+                static_cast<uint64_t>(RX_LIVENESS_TIMEOUT_MS) * 1000) {
+            ESP_LOGW(TAG, "no inbound for %us; link half-open, reconnecting",
+                     (unsigned)(RX_LIVENESS_TIMEOUT_MS / 1000));
+            error = true;
+            break;
         }
 
         stack_monitor_poll(stack);
